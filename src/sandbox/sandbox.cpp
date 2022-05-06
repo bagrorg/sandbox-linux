@@ -60,7 +60,6 @@ int enter_pivot_root(void* arg) {
         //TODO: make it better
         exit(EXIT_FAILURE);
     }
-
     // Stop n wait for tracer reaction
     if (raise(SIGSTOP)) {
         //TODO: make it better
@@ -158,8 +157,10 @@ void run_sandbox(const struct sandbox_data& data) {
         emergency_kill(data);
     }
 
-
-    while (waitpid(pid, &statloc, 0) > 0) {}
+    while (!WIFEXITED(statloc)) {
+        ptrace(PTRACE_SYSCALL, pid, 0, 0);
+        waitpid(pid, &statloc, 0);
+    }
 
     unmount(".", MNT_DETACH);
     fs::remove(data.executable_path.filename());
