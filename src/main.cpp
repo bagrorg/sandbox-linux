@@ -9,5 +9,17 @@ int main(int argc, char* argv[]) {
     data.stack_size = 10240;
     data.time_execution_limit_ms = 0;
 
+    data.rlimits_size = 1;
+    rlimit r;
+    getrlimit(RLIMIT_AS, &r);
+
+    data.rlimits[0] = {
+            .resource = RLIMIT_AS,
+            .rlim = {
+                    .rlim_cur = 1024,
+                    .rlim_max = r.rlim_max,
+            }
+    };
+
     run_sandbox(data);
 }

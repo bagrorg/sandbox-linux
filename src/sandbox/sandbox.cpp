@@ -10,6 +10,8 @@
 #include <fstream>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <sys/ptrace.h>
+
 
 #include "sandbox.h"
 
@@ -53,6 +55,18 @@ void unmount(const char* path, int flags) {
 }
 
 int enter_pivot_root(void* arg) {
+    //Allow tracing
+    if (ptrace(PTRACE_TRACEME, 0, NULL, NULL) < 0) {
+        //TODO: make it better
+        exit(EXIT_FAILURE);
+    }
+
+    // Stop n wait for tracer reaction
+    if (raise(SIGSTOP)) {
+        //TODO: make it better
+        exit(EXIT_FAILURE);
+    }
+
     drop_privileges();
 
     fs::create_directories(PUT_OLD);
@@ -89,6 +103,22 @@ int enter_pivot_root(void* arg) {
     return 0;
 }
 
+void emergency_kill(const struct sandbox_data& data) {
+    // TODO: wait for process; check kill success and errno
+    kill(data.pid, SIGKILL);
+    throw std::runtime_error("Problem with waitpid!");
+}
+
+void set_rlimits(const struct sandbox_data& data) {
+    for (size_t j = 0; j < data.rlimits_size; j++) {
+        errno = 0;
+        int ret = prlimit(data.pid, data.rlimits[j].resource, &data.rlimits[j].rlim, NULL);
+        if (ret < 0) {
+            emergency_kill(data);
+        }
+    }
+}
+
 void run_sandbox(const struct sandbox_data& data) {
     // Add checks: executable exists, it is ELF
     // Add checks: root fs directory exists
@@ -97,7 +127,7 @@ void run_sandbox(const struct sandbox_data& data) {
 
     void* stack = mmap(NULL, data.stack_size, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS | MAP_STACK, -1, 0);
-    void* stack_top = stack + data.stack_size;
+    void* stack_top = (char *) stack + data.stack_size;
 
 
     bind_new_root(data.rootfs_path.c_str());
@@ -119,7 +149,16 @@ void run_sandbox(const struct sandbox_data& data) {
         throw std::runtime_error(std::string(strerror(errno)));
     }
 
+    set_rlimits(data);
     int statloc;
+    if (waitpid(pid, &statloc, 0) < 0) {
+        emergency_kill(data);
+    }
+    if (!WIFSTOPPED(statloc) || WSTOPSIG(statloc) != SIGSTOP) {
+        emergency_kill(data);
+    }
+
+
     while (waitpid(pid, &statloc, 0) > 0) {}
 
     unmount(".", MNT_DETACH);
